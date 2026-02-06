@@ -1,0 +1,7 @@
+faster-whisper
+TTS
+sounddevice
+scipy
+requests
+praw
+feedparser
