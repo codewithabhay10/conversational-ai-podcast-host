@@ -107,6 +107,67 @@ def _chat_stream(url, payload):
         return full_text.strip() if full_text else "Sorry, lost my train of thought!"
 
 
+import re as _re
+
+_SENTENCE_END = _re.compile(r'(?<=[.!?])\s+')
+
+
+def chat_stream_sentences(messages):
+    """
+    Generator: stream from Ollama and yield (sentence, full_text_so_far)
+    as each sentence completes.  Yields the trailing fragment at the end.
+
+    Usage:
+        full = ""
+        for sentence, full in chat_stream_sentences(msgs):
+            speak(sentence)   # start TTS immediately
+    """
+    url = f"{_ollama_url()}/api/chat"
+    payload = {
+        "model": _ollama_model(),
+        "messages": messages,
+        "stream": True,
+        "options": _ollama_options(),
+    }
+
+    buffer = ""
+    full_text = ""
+
+    try:
+        resp = _session.post(url, json=payload, stream=True, timeout=120)
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if line:
+                chunk = json.loads(line)
+                token = chunk.get("message", {}).get("content", "")
+                if token:
+                    buffer += token
+                    full_text += token
+
+                    # Yield every complete sentence in the buffer
+                    while True:
+                        m = _SENTENCE_END.search(buffer)
+                        if not m:
+                            break
+                        sentence = buffer[:m.start() + 1].strip()  # include the .!?
+                        buffer = buffer[m.end():]                  # remainder
+                        if sentence:
+                            yield (sentence, full_text)
+
+                if chunk.get("done", False):
+                    break
+
+        # Yield any remaining text in the buffer
+        remainder = buffer.strip()
+        if remainder:
+            yield (remainder, full_text)
+
+    except Exception as e:
+        log.error(f"Stream-sentence error: {e}")
+        if buffer.strip():
+            yield (buffer.strip(), full_text)
+
+
 def build_messages(system_prompt, history, user_input, topic_context=""):
     """
     Build the message list for Ollama chat.

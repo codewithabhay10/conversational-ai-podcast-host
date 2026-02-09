@@ -87,11 +87,133 @@ def speak(text, block=True):
 
         # Play it
         _play_audio(OUTPUT_WAV, block=block)
-
+        # Clean up — file is disposable after playback
+        _remove_wav(OUTPUT_WAV)
     except Exception as e:
         log.error(f"TTS error: {e}")
         # Fallback: just print the text
         print(f"\n🔇 [TTS failed, text]: {text}")
+
+
+def split_by_sentence(text, max_sentences=2):
+    """
+    Split text into chunks of at most `max_sentences` sentences.
+    Returns a list of chunk strings.
+    """
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        return [text] if text.strip() else []
+
+    chunks = []
+    for i in range(0, len(sentences), max_sentences):
+        chunk = " ".join(sentences[i:i + max_sentences])
+        chunks.append(chunk)
+    return chunks
+
+
+# ── Pipelined TTS: synthesize behind playback ───────────────
+_synth_lock = threading.Lock()  # Coqui is NOT thread-safe
+
+
+def _synth_chunk(text, wav_path):
+    """Synthesize `text` to `wav_path` (thread-safe via lock)."""
+    from config import TTS_SPEAKER
+    try:
+        engine = _get_engine()
+        with _synth_lock:
+            engine.tts_to_file(text=text, file_path=wav_path, speaker=TTS_SPEAKER)
+        return True
+    except Exception as e:
+        log.error(f"Synth error: {e}")
+        return False
+
+
+def speak_pipelined(sentence_iter, print_fn=None):
+    """
+    Consume a sentence generator and pipeline TTS:
+      Stream LLM tokens → detect sentence boundary →
+      synthesize sentence 1 → start playing →
+      synthesize sentence 2 while sentence 1 plays → ...
+
+    This is the single biggest UX win:
+      Before: LLM wait 8s → TTS wait 6s → hear voice at 14s
+      After:  first sentence ~2s → hear voice at ~4s
+
+    sentence_iter: iterable yielding (sentence_text, full_reply_so_far)
+    print_fn:      optional callback for printing each sentence as it arrives
+    Returns:       the complete reply text.
+    """
+    from config import OUTPUT_WAV
+
+    base, ext = os.path.splitext(OUTPUT_WAV)
+    full_reply = ""
+    chunk_idx = 0
+
+    # Stores (wav_path, thread) for the sentence being synthesized in background
+    pending = None    # (thread, wav_path) | None
+    prev_wav = None   # path of the WAV currently playing (to delete after)
+
+    try:
+        for sentence, full_so_far in sentence_iter:
+            full_reply = full_so_far
+            if print_fn:
+                print_fn(sentence)
+
+            clean = _clean_for_speech(sentence)
+            if not clean:
+                continue
+
+            wav_path = f"{base}_pipe{chunk_idx}{ext}"
+            chunk_idx += 1
+
+            if pending is None:
+                # ── First sentence: synth synchronously, play non-blocking ──
+                ok = _synth_chunk(clean, wav_path)
+                if ok:
+                    _play_audio(wav_path, block=False)
+                    prev_wav = wav_path
+                    pending = "playing"
+            else:
+                # ── Subsequent sentences: synth THIS one synchronously,
+                #    wait for PREVIOUS audio to finish, then play THIS one ──
+                ok = _synth_chunk(clean, wav_path)
+                # Wait for previous playback to finish
+                try:
+                    import sounddevice as sd
+                    sd.wait()
+                except Exception:
+                    pass
+                # Delete the previous WAV — it's done playing
+                _remove_wav(prev_wav)
+                # Now play the just-synthesized sentence
+                if ok:
+                    _play_audio(wav_path, block=False)
+                    prev_wav = wav_path
+
+        # ── Wait for last sentence to finish playing ──
+        if pending is not None:
+            try:
+                import sounddevice as sd
+                sd.wait()
+            except Exception:
+                pass
+            _remove_wav(prev_wav)
+
+    except Exception as e:
+        log.error(f"Pipeline TTS error: {e}")
+
+    return full_reply
+
+
+def _remove_wav(path):
+    """Silently delete a wav file if it exists."""
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
 
 
 def _play_audio(filepath, block=True):

@@ -11,6 +11,8 @@ interface WebSocketChatHook {
   sendMessage: (text: string) => void;
   startTopic: (topic: string, topicContext?: string) => void;
   reconnect: () => void;
+  /** Register a callback for sentence events (fired as each sentence completes during streaming) */
+  onSentence: (cb: ((sentence: string) => void) | null) => void;
 }
 
 export function useWebSocketChat(): WebSocketChatHook {
@@ -24,6 +26,15 @@ export function useWebSocketChat(): WebSocketChatHook {
   const topicRef = useRef("");
   const topicContextRef = useRef("");
   const reconnectTimerRef = useRef<NodeJS.Timeout>();
+  const sentenceCallbackRef = useRef<((sentence: string) => void) | null>(null);
+
+  /** Register a callback invoked for each server-side sentence event */
+  const onSentence = useCallback(
+    (cb: ((sentence: string) => void) | null) => {
+      sentenceCallbackRef.current = cb;
+    },
+    []
+  );
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -46,6 +57,13 @@ export function useWebSocketChat(): WebSocketChatHook {
         case "token":
           setIsStreaming(true);
           setStreamingContent((prev) => prev + data.content);
+          break;
+
+        case "sentence":
+          // Server detected a complete sentence — fire TTS callback immediately
+          if (sentenceCallbackRef.current) {
+            sentenceCallbackRef.current(data.content);
+          }
           break;
 
         case "complete":
@@ -160,5 +178,6 @@ export function useWebSocketChat(): WebSocketChatHook {
     sendMessage,
     startTopic,
     reconnect,
+    onSentence,
   };
 }

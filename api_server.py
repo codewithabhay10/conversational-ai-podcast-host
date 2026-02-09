@@ -203,7 +203,11 @@ async def tts_endpoint(req: dict):
 
         engine = _get_engine()
         engine.tts_to_file(text=first_chunk, file_path=OUTPUT_WAV, speaker=TTS_SPEAKER)
-        return FileResponse(OUTPUT_WAV, media_type="audio/wav", filename="response.wav")
+
+        from starlette.background import BackgroundTask
+        # Delete the WAV after it's been sent to the client
+        cleanup = BackgroundTask(lambda: os.remove(OUTPUT_WAV) if os.path.exists(OUTPUT_WAV) else None)
+        return FileResponse(OUTPUT_WAV, media_type="audio/wav", filename="response.wav", background=cleanup)
     except ImportError:
         raise HTTPException(501, "TTS engine not available. Install Coqui TTS.")
     except Exception as e:
@@ -317,10 +321,19 @@ def _get_httpx_client():
 
 
 async def _stream_ollama(ws, messages, ollama_url, model):
-    """Stream Ollama chat response, sending tokens via WebSocket."""
+    """
+    Stream Ollama chat response, sending tokens AND sentence events via WebSocket.
+    Detects sentence boundaries (.!?) in the token stream and emits:
+      { "type": "sentence", "content": "Complete sentence." }
+    so the browser can TTS each sentence immediately while LLM keeps generating.
+    """
+    import re
     from llm.llm import _ollama_options
 
     full_text = ""
+    buffer = ""   # accumulates tokens until a sentence boundary is found
+    _sentence_end = re.compile(r'(?<=[.!?])\s+')
+
     url = f"{ollama_url}/api/chat"
     payload = {
         "model": model,
@@ -338,9 +351,27 @@ async def _stream_ollama(ws, messages, ollama_url, model):
                     token = chunk.get("message", {}).get("content", "")
                     if token:
                         full_text += token
+                        buffer += token
                         await ws.send_json({"type": "token", "content": token})
+
+                        # Check for complete sentences in buffer
+                        while True:
+                            m = _sentence_end.search(buffer)
+                            if not m:
+                                break
+                            sentence = buffer[:m.start() + 1].strip()
+                            buffer = buffer[m.end():]
+                            if sentence:
+                                await ws.send_json({"type": "sentence", "content": sentence})
+
                     if chunk.get("done", False):
                         break
+
+        # Emit any remaining text as a final sentence
+        remainder = buffer.strip()
+        if remainder:
+            await ws.send_json({"type": "sentence", "content": remainder})
+
     except Exception as e:
         log.error(f"Ollama stream error: {e}")
         await ws.send_json({"type": "error", "message": f"LLM error: {e}"})

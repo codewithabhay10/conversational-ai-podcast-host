@@ -117,7 +117,8 @@ def main():
     # 7) Pre-load STT model + calibrate mic + load TTS
     print("⏳ Loading speech models (first time may take a minute)...")
     from stt.stt import listen, warmup_stt
-    from tts.tts_engine import speak, warmup_tts
+    from tts.tts_engine import speak, warmup_tts, speak_pipelined
+    from llm.llm import chat_stream_sentences
     warmup_stt()   # pre-load whisper model + dummy transcription + calibrate mic
     warmup_tts()   # pre-load TTS model + dummy synthesis (JIT warmup)
 
@@ -128,14 +129,20 @@ def main():
 
     intro_prompt = engine.get_intro_prompt()
     messages = engine.process_turn(intro_prompt)
-    intro_reply = llm_chat(messages)
-
-    print(f"\n🤖 Host: {intro_reply}\n")
+    # ── Pipeline: stream LLM tokens → speak sentences as they arrive ──
+    sentence_gen = chat_stream_sentences(messages)
+    intro_parts = []
+    def _print_intro(s):
+        intro_parts.append(s)
+        sys.stdout.write(s + " ")
+        sys.stdout.flush()
+    intro_reply = speak_pipelined(sentence_gen, print_fn=_print_intro)
+    if not intro_reply:
+        intro_reply = " ".join(intro_parts)
+    print(f"\n\U0001f916 Host: {intro_reply}\n")
     engine.add_to_history("user", intro_prompt)
     engine.add_to_history("assistant", intro_reply)
     engine.advance_state(intro_prompt)
-
-    speak(intro_reply)
 
     # 9) Voice loop
     while True:
@@ -149,11 +156,12 @@ def main():
                 engine.advance_state("")
                 silence_prompt = engine.handle_silence()
                 messages = engine.process_turn(silence_prompt)
-                reply = llm_chat(messages)
-
-                print(f"\n🤖 Host: {reply}\n")
-                engine.add_to_history("assistant", reply)
-                speak(reply)
+                # Pipeline: stream → speak sentence-by-sentence
+                sentence_gen = chat_stream_sentences(messages)
+                reply = speak_pipelined(sentence_gen)
+                if reply:
+                    print(f"\n\U0001f916 Host: {reply}\n")
+                    engine.add_to_history("assistant", reply)
                 continue
 
             print(f"\n🧑 You: {user_text}")
@@ -170,19 +178,18 @@ def main():
                 print("\n👋 Podcast ended. See you next time!")
                 break
 
-            # Process turn
+            # Process turn — PIPELINED: LLM streams → TTS speaks sentence-by-sentence
             engine.advance_state(user_text)
             messages = engine.process_turn(user_text)
-            reply = llm_chat(messages)
 
-            print(f"\n🤖 Host: {reply}\n")
+            sentence_gen = chat_stream_sentences(messages)
+            reply = speak_pipelined(sentence_gen)
+
+            print(f"\n\U0001f916 Host: {reply}\n")
 
             # Update history
             engine.add_to_history("user", user_text)
             engine.add_to_history("assistant", reply)
-
-            # Speak
-            speak(reply)
 
         except KeyboardInterrupt:
             print("\n\n👋 Podcast interrupted. See you next time!")

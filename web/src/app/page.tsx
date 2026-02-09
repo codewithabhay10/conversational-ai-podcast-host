@@ -35,6 +35,7 @@ export default function Home() {
     sendMessage,
     startTopic,
     reconnect,
+    onSentence,
   } = useWebSocketChat();
 
   const {
@@ -48,8 +49,6 @@ export default function Home() {
   const { speak: ttsSpeak, speakSentence: ttsSpeakSentence, stop: ttsStop } = useTTS();
   const [autoSpeak, setAutoSpeak] = useState(true);
   const prevMsgCountRef = useRef(0);
-  /** Tracks how many sentences from streamingContent we've already spoken */
-  const spokenSentenceCountRef = useRef(0);
 
   // Load topics & check status on mount
   useEffect(() => {
@@ -77,50 +76,19 @@ export default function Home() {
     }
   }, [isListening, transcript, sendMessage, ttsStop]);
 
-  // ── Streaming TTS: speak sentences AS they arrive during streaming ──
-  // Detect sentence boundaries in streamingContent and speak each sentence
-  // immediately — don't wait for the full reply. This collapses perceived
-  // latency from "wait 14s → hear voice" to "hear voice in ~2s".
+  // ── Pipelined TTS: server sends "sentence" events as LLM streams ──
+  // Register callback so each sentence is spoken immediately via browser
+  // SpeechSynthesis. No client-side regex needed — server detects boundaries.
   useEffect(() => {
-    if (!autoSpeak || !isStreaming || !streamingContent) return;
-
-    // Find complete sentences (ending with . ! ?)
-    const sentenceEndings = streamingContent.match(/[^.!?]*[.!?]/g) || [];
-    const newCount = sentenceEndings.length;
-
-    // Speak only newly completed sentences
-    if (newCount > spokenSentenceCountRef.current) {
-      for (let i = spokenSentenceCountRef.current; i < newCount; i++) {
-        ttsSpeakSentence(sentenceEndings[i].trim());
-      }
-      spokenSentenceCountRef.current = newCount;
+    if (autoSpeak) {
+      onSentence((sentence: string) => {
+        ttsSpeakSentence(sentence);
+      });
+    } else {
+      onSentence(null);
     }
-  }, [streamingContent, isStreaming, autoSpeak, ttsSpeakSentence]);
-
-  // Reset spoken sentence counter when streaming starts
-  useEffect(() => {
-    if (isStreaming) {
-      spokenSentenceCountRef.current = 0;
-    }
-  }, [isStreaming]);
-
-  // Speak any remaining un-sentenced tail when streaming completes
-  useEffect(() => {
-    if (autoSpeak && messages.length > prevMsgCountRef.current) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg?.role === "assistant") {
-        // Find the tail that wasn't spoken during streaming
-        // (text after the last sentence-ending punctuation)
-        const sentenceEndings = lastMsg.content.match(/[^.!?]*[.!?]/g) || [];
-        const spokenLen = sentenceEndings.join("").length;
-        const tail = lastMsg.content.slice(spokenLen).trim();
-        if (tail) {
-          ttsSpeakSentence(tail);
-        }
-      }
-    }
-    prevMsgCountRef.current = messages.length;
-  }, [messages, autoSpeak, ttsSpeakSentence]);
+    return () => onSentence(null);
+  }, [autoSpeak, onSentence, ttsSpeakSentence]);
 
   const handleSelectTopic = useCallback(
     (topic: Topic) => {
