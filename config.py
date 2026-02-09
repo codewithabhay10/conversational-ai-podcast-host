@@ -16,6 +16,14 @@ OUTPUT_WAV = os.path.join(DATA_DIR, "output.wav")
 OLLAMA_URL = "http://localhost:11434"
 OLLAMA_MODEL = "llama3"  # or "mistral"
 
+# --- Ollama Generation Speed Tuning ---
+OLLAMA_NUM_PREDICT = 150      # max tokens per reply (keeps responses snappy)
+OLLAMA_NUM_CTX = 2048         # context window (lower = faster)
+OLLAMA_TEMPERATURE = 0.7      # creativity vs speed tradeoff
+OLLAMA_TOP_K = 40
+OLLAMA_TOP_P = 0.9
+OLLAMA_REPEAT_PENALTY = 1.1
+
 # --- STT (faster-whisper) ---
 WHISPER_MODEL_SIZE = "base"  # tiny, base, small, medium, large-v2
 WHISPER_DEVICE = "cpu"       # "cpu" or "cuda"
@@ -24,6 +32,8 @@ WHISPER_COMPUTE = "int8"     # int8, float16, float32
 # --- TTS (Coqui) ---
 TTS_MODEL = "tts_models/en/vctk/vits"
 TTS_SPEAKER = "p273"  # energetic male voice; try p228 for female
+TTS_MAX_CHARS = 300            # truncate text for faster TTS
+USE_BROWSER_TTS = True         # prefer browser SpeechSynthesis (instant, no server load)
 
 # --- Audio Recording ---
 RECORD_SAMPLERATE = 16000
@@ -34,7 +44,7 @@ SILENCE_TIMEOUT = 1.5         # seconds of silence after speech before auto-stop
 MAX_RECORD_SECONDS = 15       # hard cap on recording length
 
 # --- Conversation ---
-MAX_HISTORY = 20  # max messages kept in context window
+MAX_HISTORY = 10  # max messages kept in context window (lower = faster responses)
 
 # --- Research ---
 HN_FETCH_DAYS = 10
@@ -48,7 +58,8 @@ You explain clearly.
 You ask engaging questions.
 You speak casually like a friend in a car.
 You use examples and stories.
-Keep responses concise — under 4 sentences unless explaining something complex.
+Keep responses concise — 2-3 sentences max unless the user asks for detail.
+Never write lists or bullet points — speak naturally.
 Always end with a question or invitation to continue."""
 
 # Ensure data dir exists

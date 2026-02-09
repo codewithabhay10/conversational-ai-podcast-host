@@ -39,6 +39,22 @@ def warmup():
         log.error(f"Ollama warm-up failed: {e}")
 
 
+def _ollama_options():
+    """Build Ollama generation options for speed."""
+    from config import (
+        OLLAMA_NUM_PREDICT, OLLAMA_NUM_CTX,
+        OLLAMA_TEMPERATURE, OLLAMA_TOP_K, OLLAMA_TOP_P, OLLAMA_REPEAT_PENALTY,
+    )
+    return {
+        "num_predict": OLLAMA_NUM_PREDICT,
+        "num_ctx": OLLAMA_NUM_CTX,
+        "temperature": OLLAMA_TEMPERATURE,
+        "top_k": OLLAMA_TOP_K,
+        "top_p": OLLAMA_TOP_P,
+        "repeat_penalty": OLLAMA_REPEAT_PENALTY,
+    }
+
+
 def chat(messages, stream=False):
     """
     Send a chat request to Ollama.
@@ -50,6 +66,7 @@ def chat(messages, stream=False):
         "model": _ollama_model(),
         "messages": messages,
         "stream": stream,
+        "options": _ollama_options(),
     }
 
     try:

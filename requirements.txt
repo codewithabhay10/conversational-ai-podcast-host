@@ -5,3 +5,9 @@ scipy
 requests
 praw
 feedparser
+
+# Web interface
+fastapi
+uvicorn[standard]
+httpx
+python-multipart
