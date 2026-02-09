@@ -117,8 +117,9 @@ def main():
     # 7) Pre-load STT model + calibrate mic + load TTS
     print("⏳ Loading speech models (first time may take a minute)...")
     from stt.stt import listen, warmup_stt
-    from tts.tts_engine import speak
-    warmup_stt()  # pre-load whisper model + measure ambient noise
+    from tts.tts_engine import speak, warmup_tts
+    warmup_stt()   # pre-load whisper model + dummy transcription + calibrate mic
+    warmup_tts()   # pre-load TTS model + dummy synthesis (JIT warmup)
 
     # 8) Generate intro
     print("\n" + "─" * 50)

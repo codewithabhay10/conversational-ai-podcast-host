@@ -188,8 +188,29 @@ def transcribe(audio_data=None):
 
 
 def warmup_stt():
-    """Pre-load whisper model and calibrate mic."""
-    _get_model()
+    """Pre-load whisper model, run dummy transcription (JIT warmup), and calibrate mic."""
+    import tempfile, os
+    from scipy.io import wavfile
+    from config import RECORD_SAMPLERATE
+
+    model = _get_model()
+
+    # Generate a tiny silent WAV and transcribe it — forces JIT / graph compilation
+    # so the first real transcription is fast.
+    try:
+        silence = np.zeros(RECORD_SAMPLERATE, dtype=np.float32)  # 1 second of silence
+        tmp_path = os.path.join(tempfile.gettempdir(), "_stt_warmup.wav")
+        wavfile.write(tmp_path, RECORD_SAMPLERATE, silence)
+        log.info("STT warmup: running dummy transcription...")
+        segments, _ = model.transcribe(tmp_path, beam_size=1, language="en")
+        # Consume the generator to actually run inference
+        for _ in segments:
+            pass
+        log.info("STT warmup complete — model is hot.")
+        os.remove(tmp_path)
+    except Exception as e:
+        log.warning(f"STT warmup transcription failed (non-critical): {e}")
+
     calibrate_mic()
 
 

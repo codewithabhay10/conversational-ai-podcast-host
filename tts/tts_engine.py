@@ -34,6 +34,32 @@ def _get_engine():
     return _tts_engine
 
 
+def warmup_tts():
+    """
+    Pre-load TTS model and run a dummy synthesis.
+    This forces weight loading + JIT compilation so the first real
+    TTS call is fast (typically cuts cold-start from ~13s to ~6s).
+    """
+    import tempfile
+
+    try:
+        engine = _get_engine()
+        tmp_path = os.path.join(tempfile.gettempdir(), "_tts_warmup.wav")
+        from config import TTS_SPEAKER
+        log.info("TTS warmup: running dummy synthesis...")
+        engine.tts_to_file(
+            text="Warming up the voice engine.",
+            file_path=tmp_path,
+            speaker=TTS_SPEAKER,
+        )
+        log.info("TTS warmup complete — model is hot.")
+        # Clean up temp file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+    except Exception as e:
+        log.warning(f"TTS warmup failed (non-critical): {e}")
+
+
 def speak(text, block=True):
     """
     Convert text to speech and play it.
@@ -110,11 +136,11 @@ def _clean_for_speech(text):
     # Collapse whitespace
     text = re.sub(r'\s+', ' ', text).strip()
     # Truncate very long text (TTS can choke)
-    if len(text) > 500:
-        # Find sentence boundary near 500 chars
-        idx = text.rfind('.', 0, 500)
-        if idx > 200:
+    if len(text) > 300:
+        # Find sentence boundary near 300 chars
+        idx = text.rfind('.', 0, 300)
+        if idx > 100:
             text = text[:idx + 1]
         else:
-            text = text[:500] + "."
+            text = text[:300] + "."
     return text

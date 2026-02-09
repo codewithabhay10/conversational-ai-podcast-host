@@ -52,6 +52,9 @@ def get_memory():
     return _memory
 
 
+_tts_ready = False
+
+
 def ensure_ollama():
     global _ollama_ready
     if not _ollama_ready:
@@ -60,6 +63,18 @@ def ensure_ollama():
             raise HTTPException(503, "Ollama is not running. Start it with: ollama serve")
         warmup()
         _ollama_ready = True
+
+
+def ensure_tts():
+    """Warm up TTS on first use (load model + JIT)."""
+    global _tts_ready
+    if not _tts_ready:
+        try:
+            from tts.tts_engine import warmup_tts
+            warmup_tts()
+            _tts_ready = True
+        except Exception as e:
+            log.warning(f"TTS warmup skipped: {e}")
 
 
 # ── Pydantic models ───────────────────────────────────────────
@@ -166,30 +181,28 @@ async def chat_endpoint(req: ChatRequest):
 
 @app.post("/api/tts")
 async def tts_endpoint(req: dict):
-    """Generate TTS audio for given text. Returns wav file."""
+    """Generate TTS audio for given text. Returns wav file.
+    Synthesizes only the first 2-sentence chunk for speed."""
     text = req.get("text", "")
     if not text.strip():
         raise HTTPException(400, "No text provided")
 
-    from config import OUTPUT_WAV, TTS_SPEAKER, TTS_MODEL, TTS_MAX_CHARS
+    from config import OUTPUT_WAV, TTS_SPEAKER, TTS_MODEL
+
+    ensure_tts()  # warm up on first call
 
     try:
-        from tts.tts_engine import _clean_for_speech, _get_engine
+        from tts.tts_engine import _clean_for_speech, _get_engine, split_by_sentence
         clean = _clean_for_speech(text)
         if not clean:
             raise HTTPException(400, "Text cleaned to empty string")
 
-        # Truncate for speed — only synthesize first N chars
-        if len(clean) > TTS_MAX_CHARS:
-            # Cut at sentence boundary
-            idx = clean.rfind('.', 0, TTS_MAX_CHARS)
-            if idx > 100:
-                clean = clean[:idx + 1]
-            else:
-                clean = clean[:TTS_MAX_CHARS] + "."
+        # Only synthesize first 2-sentence chunk (fast perceived latency)
+        chunks = split_by_sentence(clean, max_sentences=2)
+        first_chunk = chunks[0] if chunks else clean
 
         engine = _get_engine()
-        engine.tts_to_file(text=clean, file_path=OUTPUT_WAV, speaker=TTS_SPEAKER)
+        engine.tts_to_file(text=first_chunk, file_path=OUTPUT_WAV, speaker=TTS_SPEAKER)
         return FileResponse(OUTPUT_WAV, media_type="audio/wav", filename="response.wav")
     except ImportError:
         raise HTTPException(501, "TTS engine not available. Install Coqui TTS.")
